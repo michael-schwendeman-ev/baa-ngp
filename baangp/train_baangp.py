@@ -13,7 +13,8 @@ import torch.nn.functional as F
 from torchmetrics import StructuralSimilarityIndexMeasure, MultiScaleStructuralSimilarityIndexMeasure
 import torchvision.transforms.functional as torchvision_F
 import tqdm
-from datasets.ba_synthetic import SubjectLoader
+#from datasets.ba_synthetic import SubjectLoader
+from datasets.ba_ev import SubjectLoader
 from evaluation_utils import (
     evaluate_camera_alignment,
     evaluate_test_time_photometric_optim,
@@ -23,6 +24,7 @@ from lie_utils import se3_to_SE3
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from pose_utils import compose_poses
 from radiance_fields.baangp import BAradianceField
+from radiance_fields.ngp import NGPRadianceField
 from utils import (
     render_image_with_occgrid,
     set_random_seed,
@@ -37,6 +39,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data-root",
         type=str,
+        default="/home/ubuntu/src/data/",#nerf_synthetic",
         help="the root dir of the dataset",
     )
     parser.add_argument(
@@ -49,8 +52,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene",
         type=str,
-        default="lego",
-        choices=SubjectLoader.SUBJECT_IDS,
+        default="CTTBLO004_ROI_1_FE_DS4_masked",#"mic",
         help="which scene to use",
     )
 
@@ -68,13 +70,16 @@ if __name__ == "__main__":
         action="extend"
     )
 
-    parser.add_argument("--save-dir", type=str,
-        required=True,
+    parser.add_argument("--save-dir", 
+        type=str,
+        default="baa_test_opt",
         help="The output root directory for saving models.")
     args = parser.parse_args()
 
     device = "cuda:0"
     
+    args.save_dir = f"{args.data_root}/{args.scene}/{args.save_dir}"
+
     set_random_seed(args.seed)
     if os.path.exists(args.save_dir):
         print('%s exists!'%args.save_dir)
@@ -85,10 +90,10 @@ if __name__ == "__main__":
     # training parameters
     lr = 1.e-2
     lr_end = 1.e-4
-    lr_pose = 1.e-3 #1.e-2
-    lr_pose_end = 1.e-5 #1.e-3
+    lr_pose = 1.e-2 #1.e-2
+    lr_pose_end = 1.e-3 #1.e-3
     optim_lr_pose = 1.e-3
-    max_steps = 40000 # 20000
+    max_steps = 10000 # 20000
     init_batch_size = 1024
     target_sample_batch_size = 1 << 18
     weight_decay = 1e-6
@@ -97,8 +102,8 @@ if __name__ == "__main__":
     near_plane = 0.0
     far_plane = 1.0e10
     # dataset parameters
-    train_dataset_kwargs = {"factor": 2}
-    test_dataset_kwargs = {"factor": 2}
+    train_dataset_kwargs = {"factor": 1}
+    test_dataset_kwargs = {"factor": 4}
     # model parameters
     grid_resolution = 128
     grid_nlvl = 1
@@ -116,6 +121,7 @@ if __name__ == "__main__":
         device=device,
         **train_dataset_kwargs,
     )
+    aabb = train_dataset.aabb
     print("Found %d train images"%len(train_dataset.images))
     print("Train image shape", train_dataset.images.shape)
     print("Setup the test dataset.")
@@ -145,15 +151,33 @@ if __name__ == "__main__":
         device=device,
         c2f=args.c2f,
         ).to(device)
+
+    # radiance_field = NGPRadianceField(aabb=estimator.aabbs[-1],).to(device)
     
     print("Setting up optimizers...")
     optimizer = torch.optim.Adam(
         radiance_field.parameters(), lr=lr, eps=1e-15, weight_decay=weight_decay
     )
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(
+    #             optimizer,
+    #             gamma=(lr_end/lr)**(1./max_steps)
+    #         )
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+        [
+            torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=100
+            ),
+            torch.optim.lr_scheduler.MultiStepLR(
                 optimizer,
-                gamma=(lr_end/lr)**(1./max_steps)
-            )
+                milestones=[
+                    max_steps // 2,
+                    max_steps * 3 // 4,
+                    max_steps * 9 // 10,
+                ],
+                gamma=0.33,
+            ),
+        ]
+    )
     models = {"radiance_field": radiance_field, "estimator": estimator}
     schedulers={"scheduler": scheduler}
     optimizers={"optimizer": optimizer}
@@ -208,8 +232,8 @@ if __name__ == "__main__":
                 optimizers[key].zero_grad(set_to_none=True)
 
             # query rays
-
             rays = models["radiance_field"].query_rays(idx=image_ids, grid_3D=grid_3D, gt_poses=gt_poses, mode='train')
+
             # render
             rgb, acc, depth, n_rendering_samples = render_image_with_occgrid(
                 radiance_field=models["radiance_field"],
@@ -245,7 +269,7 @@ if __name__ == "__main__":
                 schedulers[key].step()
             loader.set_postfix(it=step, loss="{:.4f}".format(scaled_train_loss[0]))
 
-            if step % 10000 == 0:
+            if step % 100 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb, pixels)
                 psnr = -10.0 * torch.log(loss) / np.log(10.0)
@@ -306,7 +330,7 @@ if __name__ == "__main__":
             render_step_size=render_step_size,
             cone_angle=cone_angle,
             data=data, 
-            sim3=sim3, lr_pose=optim_lr_pose, test_iter=100,
+            sim3=sim3, lr_pose=optim_lr_pose, test_iter=50,
             alpha_thre=alpha_thre,
             device=device,
             near_plane=near_plane,
