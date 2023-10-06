@@ -20,7 +20,7 @@ from evaluation_utils import (
     evaluate_test_time_photometric_optim,
     prealign_cameras
 )
-from lie_utils import se3_to_SE3
+from lie_utils import se3_to_SE3,so3_t3_to_SE3, so3_to_SE3
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from pose_utils import compose_poses
 from radiance_fields.baangp import BAradianceField
@@ -33,6 +33,7 @@ from utils import (
 )
 import visualization_utils as viz
 
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -74,6 +75,11 @@ if __name__ == "__main__":
         type=str,
         default="baa_test_opt",
         help="The output root directory for saving models.")
+    
+    parser.add_argument("--adjust-pose", 
+        action="store_true",
+        help="Adjust the pose parameters")
+       
     args = parser.parse_args()
 
     device = "cuda:0"
@@ -90,25 +96,27 @@ if __name__ == "__main__":
     # training parameters
     lr = 1.e-2
     lr_end = 1.e-4
-    lr_pose = 1.e-2 #1.e-2
-    lr_pose_end = 1.e-3 #1.e-3
-    optim_lr_pose = 1.e-3
+    lr_pose = 1.e-5
+    lr_pose_end = 1.e-7
+    optim_lr_pose = 1.e-5
     max_steps = 10000 # 20000
     init_batch_size = 1024
     target_sample_batch_size = 1 << 18
     weight_decay = 1e-6
     # scene parameters
-    aabb = torch.tensor([-1.5, -1.5, -1.5, 1.5, 1.5, 1.5], device=device)
+    # aabb = torch.tensor([-1.5, -1.5, -1.5, 1.5, 1.5, 1.5], device=device)
     near_plane = 0.0
     far_plane = 1.0e10
     # dataset parameters
     train_dataset_kwargs = {"factor": 1}
-    test_dataset_kwargs = {"factor": 4}
+    test_dataset_kwargs = {"factor": 1}
     # model parameters
-    grid_resolution = 128
+    grid_resolution = [400, 400, 100] #128
     grid_nlvl = 1
     # render parameters
-    render_step_size = 5e-3
+    # render_step_size = 0.5/143.0
+    render_step_size = 0.5
+    # render_step_size = 1.0/400.0
     alpha_thre = 0.0
     cone_angle = 0.0
 
@@ -122,6 +130,7 @@ if __name__ == "__main__":
         **train_dataset_kwargs,
     )
     aabb = train_dataset.aabb
+
     print("Found %d train images"%len(train_dataset.images))
     print("Train image shape", train_dataset.images.shape)
     print("Setup the test dataset.")
@@ -151,51 +160,57 @@ if __name__ == "__main__":
         device=device,
         c2f=args.c2f,
         ).to(device)
-
+    print(args.c2f)
     # radiance_field = NGPRadianceField(aabb=estimator.aabbs[-1],).to(device)
     
     print("Setting up optimizers...")
     optimizer = torch.optim.Adam(
-        radiance_field.parameters(), lr=lr, eps=1e-15, weight_decay=weight_decay
+        radiance_field.nerf.parameters(), lr=lr, eps=1e-15, weight_decay=weight_decay
     )
-    # scheduler = torch.optim.lr_scheduler.ExponentialLR(
-    #             optimizer,
-    #             gamma=(lr_end/lr)**(1./max_steps)
-    #         )
-    scheduler = torch.optim.lr_scheduler.ChainedScheduler(
-        [
-            torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=0.01, total_iters=100
-            ),
-            torch.optim.lr_scheduler.MultiStepLR(
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(
                 optimizer,
-                milestones=[
-                    max_steps // 2,
-                    max_steps * 3 // 4,
-                    max_steps * 9 // 10,
-                ],
-                gamma=0.33,
-            ),
-        ]
-    )
+                gamma=(lr_end/lr)**(1./max_steps)
+            )
+    # scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+    #     [
+    #         torch.optim.lr_scheduler.LinearLR(
+    #             optimizer, start_factor=0.01, total_iters=100
+    #         ),
+    #         torch.optim.lr_scheduler.MultiStepLR(
+    #             optimizer,
+    #             milestones=[
+    #                 max_steps // 2,
+    #                 max_steps * 3 // 4,
+    #                 max_steps * 9 // 10,
+    #             ],
+    #             gamma=0.33,
+    #         ),
+    #     ]
+    # )
     models = {"radiance_field": radiance_field, "estimator": estimator}
     schedulers={"scheduler": scheduler}
     optimizers={"optimizer": optimizer}
 
-    pose_optimizer = torch.optim.Adam(models['radiance_field'].se3_refine.parameters(), lr=lr_pose)
-    pose_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-        pose_optimizer,
-        gamma=(lr_pose_end/lr_pose)**(1./max_steps)
-    )
-    schedulers["pose_scheduler"] = pose_scheduler
-    optimizers["pose_optimizer"] = pose_optimizer
+    if args.adjust_pose:
+        # pose_optimizer = torch.optim.Adam(
+        #     models['radiance_field'].se3_refine.parameters(), lr=lr_pose, eps=1e-15,weight_decay=weight_decay)
+        pose_optimizer = torch.optim.Adam(
+            models['radiance_field'].se3_refine.parameters(), lr=lr_pose)
+        pose_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            pose_optimizer,
+            gamma=(lr_pose_end/lr_pose)**(1./max_steps)
+        )
+        schedulers["pose_scheduler"] = pose_scheduler
+        optimizers["pose_optimizer"] = pose_optimizer
 
     lpips_net = LPIPS(net="vgg").to(device)
     lpips_norm_fn = lambda x: x[None, ...].permute(0, 3, 1, 2) * 2 - 1
     lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
 
-
+    has_checkpoint = False
     models, optimizers, schedulers, epoch, iteration, has_checkpoint = load_ckpt(save_dir=args.save_dir, models=models, optimizers=optimizers, schedulers=schedulers)
+    # print(models["radiance_field"].pose_noise)
+    # print(models["radiance_field"].se3_refine.weight)
     # training
     if not has_checkpoint:
         tic = time.time()
@@ -250,6 +265,8 @@ if __name__ == "__main__":
                 loader.set_postfix(it=step, loss="skipped")
                 continue
 
+            # print(train_dataset.num_rays)
+            # print(len(pixels))
             if target_sample_batch_size > 0:
                 # dynamic batch size for rays to keep sample batch size constant.
                 num_rays = len(pixels)
@@ -263,13 +280,16 @@ if __name__ == "__main__":
             # do not unscale it because we are using Adam.
             scaled_train_loss = grad_scaler.scale(loss)
             scaled_train_loss.backward()
+            # print(models["radiance_field"].se3_refine.weight)
+            # print(models["radiance_field"].se3_refine.weight.grad)
+            # time.sleep(2)
             for key in optimizers:
                 optimizers[key].step()
             for key in schedulers:
                 schedulers[key].step()
             loader.set_postfix(it=step, loss="{:.4f}".format(scaled_train_loss[0]))
 
-            if step % 100 == 0:
+            if step % 1000 == 0:
                 elapsed_time = time.time() - tic
                 loss = F.mse_loss(rgb, pixels)
                 psnr = -10.0 * torch.log(loss) / np.log(10.0)
@@ -282,6 +302,9 @@ if __name__ == "__main__":
         save_ckpt(save_dir=args.save_dir, iteration=step, models=models, optimizers=optimizers, schedulers=schedulers, final=True)
     else:
         step = iteration
+
+    # torch.cuda.empty_cache()
+
     # evaluation
     print("Done training, start evaluation:")
     models["radiance_field"].eval()
@@ -290,12 +313,16 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         print("Plotting final pose alignment.")
-        pose_refine = se3_to_SE3(models["radiance_field"].se3_refine.weight)
+        pose_refine = so3_to_SE3(models["radiance_field"].se3_refine.weight)
+        # print(pose_refine)
         gt_poses = train_dataset.camfromworld
+        # print(models["radiance_field"].pose_noise)
         pred_poses = compose_poses([pose_refine, models["radiance_field"].pose_noise, gt_poses])
+        # pred_poses = gt_poses
         pose_aligned, sim3 = prealign_cameras(pred_poses, gt_poses)
         error = evaluate_camera_alignment(pose_aligned, gt_poses)
         rot_error = np.rad2deg(error.R.mean().item())
+        # print(error.t)
         trans_error = error.t.mean().item()
         print("--------------------------")
         print("{} train rot error:   {:8.3f}".format(step, rot_error)) # to use numpy, the value needs to be on cpu first.

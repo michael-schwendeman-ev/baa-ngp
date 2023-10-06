@@ -253,100 +253,50 @@ def read_reproj_jsons(transforms_path: str, reproj_path: str, downscale_factor: 
     return aabb, K, c2w, rgba, points 
 
 
-def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split: str = 'train'):
-    data_dir = os.path.join(root_fp, subject_id)
+# def load_renderings_s3(bucket_name: str, scene_folder: str):
     
-    meta = json.load(open(os.path.join(data_dir, f'transforms_{split}.json'), 'r'))
+#     client = boto3.client('s3')
 
-    images = []
-    camtoworlds = []
-    intrinsics = []
-    depths = np.zeros([4,0], dtype=float)
-    
-    #Find the ROI coordinates in 3D ENU space
-    aabb = meta['aabb']
-    Pw = np.array([[aabb[0][0],aabb[1][0],aabb[0][0],aabb[1][0]],[aabb[1][1],aabb[1][1],aabb[0][1],aabb[0][1]],[0,0,0,0],[1,1,1,1]])
+#     transforms = os.path.join(scene_folder,'transforms_train.json')
+#     file_content = client.get_object(Bucket=bucket_name, Key=transforms)['Body'].read().decode('utf-8')
+#     meta = json.loads(file_content)
 
-    for i in range(len(meta["frames"])):
-        frame = meta["frames"][i]
-        fname = os.path.join(data_dir, frame['file_path'])
-        rgba = imageio.imread(fname)
-        if crop_borders: rgba = rgba[crop_borders:-crop_borders, crop_borders:-crop_borders, :]
-
-        #per image intrinsics
-        focal, cx, cy = frame['fl_x'], frame['cx'], frame['cy']
-        cx = cx - crop_borders if crop_borders else cx
-        cy = cy - crop_borders if crop_borders else cy
-        K = np.array([[focal, 0, cx], [0, focal, cy], [0, 0, 1]])
-        intrinsics.append(K)
-        
-        #mask the image
-        c2w = np.array(frame["transform_matrix"])
-        w = frame['w'] - crop_borders * 2 if crop_borders else frame['w']
-        pts = getROICornerPixels(c2w, focal, cx, cy, w, Pw)
-        rgba, _ = maskImage(rgba, pts)
-        
-        camtoworlds.append(frame["transform_matrix"])
-        images.append(rgba)
-
-    images = np.stack(images, axis=0) #assume all images have same size
-    scaler = aabb[1][0]
-    camtoworlds = np.stack(camtoworlds, axis=0)
-    
-    camtoworlds[:, :3, -1] /= scaler
-
-    intrinsics = np.stack(intrinsics, axis=0)
-
-    aabb = np.concatenate(meta['aabb']).flatten() / scaler
-    num_images = images.shape[0]
-
-    return images, depths, camtoworlds, intrinsics, aabb, num_images
-
-
-def load_renderings_s3(bucket_name: str, scene_folder: str):
-    
-    client = boto3.client('s3')
-
-    transforms = os.path.join(scene_folder,'transforms_train.json')
-    file_content = client.get_object(Bucket=bucket_name, Key=transforms)['Body'].read().decode('utf-8')
-    meta = json.loads(file_content)
-
-    images = []
-    camtoworlds = []
-    intrinsics = []
-    depths = np.empty([4,0], dtype=float)
+#     images = []
+#     camtoworlds = []
+#     intrinsics = []
+#     depths = np.empty([4,0], dtype=float)
     
     
-    for i in range(len(meta["frames"])):
-        frame = meta["frames"][i]
-        fname = os.path.join(scene_folder, frame['file_path'][2:])
+#     for i in range(len(meta["frames"])):
+#         frame = meta["frames"][i]
+#         fname = os.path.join(scene_folder, frame['file_path'][2:])
         
-        #retrieve image from s3 bucket
-        image_byte_string = client.get_object(Bucket=bucket_name, Key=fname)['Body'].read()
+#         #retrieve image from s3 bucket
+#         image_byte_string = client.get_object(Bucket=bucket_name, Key=fname)['Body'].read()
         
-        rgba = imageio.imread(image_byte_string)
-        camtoworlds.append(frame["transform_matrix"])
-        images.append(rgba)
+#         rgba = imageio.imread(image_byte_string)
+#         camtoworlds.append(frame["transform_matrix"])
+#         images.append(rgba)
         
-        #per image intrinsics
-        focal, cx, cy = frame['fl_x'], frame['cx'], frame['cy']
-        K = np.array([[focal, 0, cx], [0, focal, cy], [0, 0, 1]])
-        intrinsics.append(K)
+#         #per image intrinsics
+#         focal, cx, cy = frame['fl_x'], frame['cx'], frame['cy']
+#         K = np.array([[focal, 0, cx], [0, focal, cy], [0, 0, 1]])
+#         intrinsics.append(K)
 
-        #depth images
-        depth_path = os.path.join(scene_folder,'depth',os.path.basename(fname).split('.')[0]+'.npy')
-        file_content = client.get_object(Bucket=bucket_name, Key=depth_path)['Body'].read()
-        pts = np.load(BytesIO(file_content))
+#         #depth images
+#         depth_path = os.path.join(scene_folder,'depth',os.path.basename(fname).split('.')[0]+'.npy')
+#         file_content = client.get_object(Bucket=bucket_name, Key=depth_path)['Body'].read()
+#         pts = np.load(BytesIO(file_content))
         
-        idx = np.ones([1, pts.shape[1]]) * i
-        pts = np.vstack((idx,pts))
+#         idx = np.ones([1, pts.shape[1]]) * i
+#         pts = np.vstack((idx,pts))
 
-        depths = np.append(depths,pts,axis=1)
+#         depths = np.append(depths,pts,axis=1)
 
-    images = np.stack(images, axis=0) #assume all images have same size
-    camtoworlds = np.stack(camtoworlds, axis=0)
-    intrinsics = np.stack(intrinsics, axis=0)
+#     images = np.stack(images, axis=0) #assume all images have same size
+#     camtoworlds = np.stack(camtoworlds, axis=0)
+#     intrinsics = np.stack(intrinsics, axis=0)
 
-    aabb = list(np.concatenate(meta['aabb']).flat)
+#     aabb = list(np.concatenate(meta['aabb']).flat)
 
-    return images, depths, camtoworlds, intrinsics, aabb
+#     return images, depths, camtoworlds, intrinsics, aabb

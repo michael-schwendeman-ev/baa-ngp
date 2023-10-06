@@ -8,7 +8,7 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 import os
 import random
 from typing import Optional, Dict
-
+import time
 
 import numpy as np
 import torch
@@ -41,12 +41,12 @@ def render_image_with_occgrid(
     # rendering options
     near_plane: float = 0.0,
     far_plane: float = 1e10,
-    render_step_size: float = 1e-3,
+    render_step_size: float = 0.5,
     render_bkgd: Optional[torch.Tensor] = None,
     cone_angle: float = 0.0,
     alpha_thre: float = 0.0,
     # test options
-    test_chunk_size: int = 8192,
+    test_chunk_size: int = 4096, #8192,
     timestamps: Optional[torch.Tensor] = None,
 ):
     """Render the pixels of an image."""
@@ -98,7 +98,10 @@ def render_image_with_occgrid(
         if radiance_field.training
         else test_chunk_size
     )
+    # print(chunk)
     for i in range(0, num_rays, chunk):
+        # time.sleep(1)
+        # print("sampling: {}".format(i))
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
         ray_indices, t_starts, t_ends = estimator.sampling(
             chunk_rays.origins,
@@ -111,6 +114,7 @@ def render_image_with_occgrid(
             cone_angle=cone_angle,
             alpha_thre=alpha_thre,
         )
+        # print("rendering: {}".format(i))
         rgb, opacity, depth, extras = rendering(
             t_starts,
             t_ends,
@@ -225,7 +229,7 @@ def save_ckpt(models: Dict,
     if schedulers is not None:
         for key in schedulers:
             checkpoint[key] = schedulers[key].state_dict()
-    assert not os.path.exists(save_model_path), f"{save_model_path} already exists!"
+    # assert not os.path.exists(save_model_path), f"{save_model_path} already exists!"
     torch.save(checkpoint, save_model_path)
     if final:
         print("Model is saved to %s"% save_model_path)

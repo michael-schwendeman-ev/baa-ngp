@@ -10,7 +10,7 @@ from .ngp import NGPRadianceField
 
 sys.path.append("..")
 from camera_utils import cam2world
-from lie_utils import se3_to_SE3
+from lie_utils import se3_to_SE3, so3_to_SO3, so3_t3_to_SE3, so3_to_SE3
 from pose_utils import construct_pose, compose_poses
 from utils import Rays
 
@@ -31,10 +31,11 @@ class BAradianceField(torch.nn.Module):
         max_resolution: int = 4096,
         use_viewdirs: bool = True,
         c2f: typing.Optional[float] = None,
-        dof: int = 6, # degree of freedom of input transformation.
+        dof: int = 3, # degree of freedom of input transformation.
         num_input_dim: int = 3,
         device: str = 'cpu',
         testing: bool = False,
+        adjust_pose: bool = True
     ) -> None:
         super().__init__()
         
@@ -52,14 +53,17 @@ class BAradianceField(torch.nn.Module):
                                      max_resolution=max_resolution,                              
                                      use_viewdirs=use_viewdirs)
         self.c2f = c2f
-
+        self.adjust_pose = adjust_pose
         # noise addition for blender.
-        
-        se3_noise = torch.randn(num_frame, dof, device=device) * 0
-        self.pose_noise = se3_to_SE3(se3_noise)
+        so3_noise = torch.randn(num_frame, dof, device=device)*0.0 #5.0e-2
+        # se3_noise[:,:3] = se3_noise[:,:3]*5.0e-4
+        # se3_noise[:,4:] = se3_noise[:,4:]*0.0
+        self.pose_noise = so3_to_SE3(so3_noise)
+        # print(self.pose_noise)
         # Learnable embedding. 
         self.se3_refine = torch.nn.Embedding(num_frame, dof, device=device)
         torch.nn.init.zeros_(self.se3_refine.weight)
+        # torch.nn.init.normal_(self.se3_refine.weight,0,1e-5)
         # TODO:see if we want to register buffer for this variable.
         self.progress = torch.nn.Parameter(torch.tensor(0.))
         self.k = torch.arange(n_levels-1, dtype=torch.float32, device=device)
@@ -94,11 +98,14 @@ class BAradianceField(torch.nn.Module):
             pose_noises = self.pose_noise[idx]
             init_poses = compose_poses([pose_noises, gt_poses])
             # add learnable pose correction
-            assert idx is not None, "idx cannot be None during training."
-            se3_refine = self.se3_refine.weight[idx]*0.001 # [B, 6] idx corresponds to frame number.
-            poses_refine = se3_to_SE3(se3_refine) # [1, 3, 4]
-            # add learnable pose correction
-            poses = compose_poses([poses_refine, init_poses])
+            if self.adjust_pose:
+                assert idx is not None, "idx cannot be None during training."
+                se3_refine = self.se3_refine.weight[idx] # [B, 6] idx corresponds to frame number.
+                poses_refine = so3_to_SE3(se3_refine) # [1, 3, 4]
+                # add learnable pose correction
+                poses = compose_poses([poses_refine, init_poses])
+            else:
+                poses = init_poses
         elif mode in ['val', 'eval', 'test-optim']:
             assert sim3 is not None, 'val, eval, test-optim needs sim3.'
             # align test pose to refined coordinate system (up to sim3)
@@ -132,17 +139,17 @@ class BAradianceField(torch.nn.Module):
             idx=idx, sim3=sim3, gt_poses=gt_poses, pose_refine_test=pose_refine_test, test_photo=test_photo,
             mode=mode)
         # # given the intrinsic/extrinsic matrices, get the camera center and ray directions
-        # center_3D = torch.zeros_like(grid_3D) # [B, N, 3]
-        # # transform from camera to world coordinates
-        # grid_3D = cam2world(grid_3D, poses) # [B, N, 3], [B, 3, 4] -> [B, 3]
-        # center_3D = cam2world(center_3D, poses) # [B, N, 3]
-        # directions = grid_3D - center_3D # [B, N, 3]
-        # viewdirs = directions / torch.linalg.norm(
-        #     directions, dim=-1, keepdims=True
-        # )
-        directions = (grid_3D[..., None, :] * poses[:, :3, :3]).sum(dim=-1)
-        viewdirs = directions / torch.linalg.norm(directions, dim=-1, keepdims=True)
-        center_3D = torch.broadcast_to(poses[:, :3, -1], directions.shape)
+        center_3D = torch.zeros_like(grid_3D) # [B, N, 3]
+        # transform from camera to world coordinates
+        grid_3D = cam2world(grid_3D, poses) # [B, N, 3], [B, 3, 4] -> [B, 3]
+        center_3D = cam2world(center_3D, poses) # [B, N, 3]
+        directions = grid_3D - center_3D # [B, N, 3]
+        viewdirs = directions / torch.linalg.norm(
+            directions, dim=-1, keepdims=True
+        )
+        # directions = (grid_3D[..., None, :] * poses[:, :3, :3]).sum(dim=-1)
+        # viewdirs = directions / torch.linalg.norm(directions, dim=-1, keepdims=True)
+        # center_3D = torch.broadcast_to(poses[:, :3, -1], directions.shape)
         if mode in ['train', 'test-optim']:
             # This makes loss calculate easier. No more reshaping is needed.
             center_3D = torch.reshape(center_3D, (-1, 3))

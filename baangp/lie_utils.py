@@ -57,6 +57,12 @@ def so3_t3_to_SE3(w, u):
     Rt = torch.cat([R,u[...,None]],dim=-1)
     return Rt
 
+def so3_to_SE3(w):
+    u = torch.zeros_like(w)
+    R = so3_to_SO3(w)
+    Rt = torch.cat([R,u[...,None]],dim=-1)
+    return Rt
+
 def skew_symmetric(w):
     w0,w1,w2 = w.unbind(dim=-1)
     O = torch.zeros_like(w0)
