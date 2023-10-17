@@ -11,7 +11,6 @@
         "--gpus", "all",
         "--ipc=host"  // see https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/running.html
     ],
-    // "initializeCommand": "../strategic-rnd-playground/aws/scripts/pull_docker.sh ev-nerf baa-ngp",
     "mounts": [
         "source=/home/ubuntu/data,target=/workspaces/data,type=bind,consistency=cached"
     ],

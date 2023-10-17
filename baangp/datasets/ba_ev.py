@@ -25,12 +25,10 @@ def parse_raw_camera(pose_raw):
     """Convert pose from camera_to_world to world_to_camera and follow the right, down, forward coordinate convention."""
     pose_flip = construct_pose(R=torch.diag(torch.tensor([1,-1,-1]))) # right, up, backward --> right down, forward
     pose = compose_poses([pose_flip, pose_raw[:3]])
-    # print(pose)
     pose = invert_pose(pose) # world_from_camera --> camera_from_world
-    # print(pose)
     return pose
     
-def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split: str = 'train'):
+def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split: str = 'train', buffer: float = 0.):
     data_dir = os.path.join(root_fp, subject_id)
     
     meta = json.load(open(os.path.join(data_dir, f'transforms_{split}.json'), 'r'))
@@ -58,26 +56,28 @@ def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split:
         intrinsics.append(K)
         
         #mask the image
-        c2w = np.array(frame["transform_matrix"])
-        w = frame['w'] - crop_borders * 2 if crop_borders else frame['w']
-        pts = du.getROICornerPixels(c2w, focal, cx, cy, w, Pw)
-        rgba, _ = du.maskImage(rgba, pts)
+        # c2w = np.array(frame["transform_matrix"])
+        # w = frame['w'] - crop_borders * 2 if crop_borders else frame['w']
+        # pts = du.getROICornerPixels(c2w, focal, cx, cy, w, Pw)
+        # rgba, _ = du.maskImage(rgba, pts)
         
         camtoworlds.append(parse_raw_camera(torch.tensor(frame["transform_matrix"], dtype=torch.float32)))
         images.append(rgba)
 
-    # images = np.stack(images, axis=0) #assume all images have same size
     images = torch.from_numpy(np.stack(images, axis=0)).to(torch.uint8)
-    scaler = aabb[1][0]
-    # scaler = 1000.0
     camtoworlds = torch.stack(camtoworlds, axis=0)
+    # scaler = aabb[1][0]
+    # scaler = 1000.0
     # print(camtoworlds[:, :3, -1])
     # camtoworlds[:, :3, -1] /= scaler
     # print(camtoworlds[:, :3, -1])
+    for mins in aabb[0]:
+        mins -= buffer
+    for maxs in aabb[1]:
+        maxs += buffer
 
 
     intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).to(torch.float32)
-
     aabb = np.concatenate(meta['aabb']).flatten() #/ scaler
     aabb = torch.from_numpy(aabb).to(torch.float32)
     num_images = images.shape[0]
@@ -95,31 +95,24 @@ class SubjectLoader(torch.utils.data.Dataset):
         split: str,
         color_bkgd_aug: str = "white",
         num_rays: int = None,
-        factor: float = 1,
         batch_over_images: bool = True,
         device: torch.device = torch.device("cpu"),
-        dof: int = 6,
-        noise: float = 0.15
+        buffer: float = 0.
     ):
         super().__init__()
         assert color_bkgd_aug in ["white", "black", "random"]
         self.split = split
-        self.factor = factor
         self.color_bkgd_aug = color_bkgd_aug
         self.batch_over_images = batch_over_images
-        self.noise = noise
         self.images, self.depths, self.w2c, self.K, self.aabb, self.num_train_img = \
-            load_renderings(root_fp, subject_id, 0, split)
+            load_renderings(root_fp, subject_id, 0, split, buffer)
 
         self.images = self.images.to(device)
-        # self.depths = torch.from_numpy(self.depths).to(torch.float32).to(device)
         self.height, self.width = self.images.shape[1:3]
         self.camfromworld = self.w2c.to(device)
         self.K = self.K.to(device)
         self.aabb = self.aabb.to(device)
 
-        # self.no_ba = False
-        # self.OPENGL_CAMERA = True
         self.num_rays = num_rays
         self.training = (self.num_rays is not None) and (
             split in ["train", "trainval"]
@@ -207,21 +200,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         grid_3D = img2cam(to_hom(xy_grid)[:, None, :], self.K[image_id]) # [B, 1, 2], [B, 3, 3] -> [B, 1, 3]
         images = self.images
         rgba = images[image_id, y, x] / 255.0
-
         w2c = torch.reshape(self.camfromworld[image_id], (-1, 3, 4)) # [3, 4] or (num_rays, 3, 4)
-        
-        # K = self.K[image_id]
-        # grid_3D = F.pad(
-        #     torch.stack(
-        #         [
-        #             (x - K[:,0, 2] + 0.5) / K[:,0, 0],
-        #             (y - K[:,1, 2] + 0.5) / K[:,1, 1] * (-1.0 if self.OPENGL_CAMERA else 1.0),
-        #         ],
-        #         dim=-1,
-        #     ),
-        #     (0, 1),
-        #     value=(-1.0 if self.OPENGL_CAMERA else 1.0),
-        # )  # [num_rays, 3]
 
         if self.training:
             rgba = torch.reshape(rgba, (-1, 4))
@@ -242,22 +221,3 @@ class SubjectLoader(torch.utils.data.Dataset):
                 "image_id": image_id, # [num_images]]
             }
 
-
-# def get_rays(x, y, K, c2w, OPENGL_CAMERA=True):
-#     import torch.nn.functional as F
-#     camera_dirs = F.pad(
-#         torch.stack(
-#             [
-#                 (x - K[:,0, 2] + 0.5) / K[:,0, 0],
-#                 (y - K[:,1, 2] + 0.5) / K[:,1, 1] * (-1.0 if OPENGL_CAMERA else 1.0),
-#             ],
-#             dim=-1,
-#         ),
-#         (0, 1),
-#         value=(-1.0 if OPENGL_CAMERA else 1.0),
-#     )  # [num_rays, 3]
-
-#     # [n_cams, height, width, 3]
-#     directions = (camera_dirs[:, None, :] * c2w[:, :3, :3]).sum(dim=-1)
-#     origins = torch.broadcast_to(c2w[:, :3, -1], directions.shape)
-#     return origins, directions, camera_dirs

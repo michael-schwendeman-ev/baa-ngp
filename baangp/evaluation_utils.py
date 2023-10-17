@@ -36,15 +36,15 @@ def prealign_cameras(pred_poses, gt_poses):
     center = torch.zeros(1, 1, 3,device=pred_poses.device)
     pred_centers = cam2world(center, pred_poses)[:,0] # [N,3]
     # print(pred_centers[0,:])
-    # gt_centers = cam2world(center, gt_poses)[:,0] # [N,3]
+    gt_centers = cam2world(center, gt_poses)[:,0] # [N,3]
     # print(gt_centers[0,:])
-    # try:
-    #     # sim3 has keys of ['t0', 't1', 's0', 's1', 'R']
-    #     sim3 = procrustes_analysis(gt_centers, pred_centers)
-    # except:
-    #     print("warning: SVD did not converge for procrustes_analysis...")
-    #     sim3 = edict(t0=0, t1=0, s0=1, s1=1, R=torch.eye(3,device=pred_poses.device))
-    sim3 = edict(t0=0, t1=0, s0=1, s1=1, R=torch.eye(3,device=pred_poses.device))  # new
+    try:
+        # sim3 has keys of ['t0', 't1', 's0', 's1', 'R']
+        sim3 = procrustes_analysis(gt_centers, pred_centers)
+    except:
+        print("warning: SVD did not converge for procrustes_analysis...")
+        sim3 = edict(t0=0, t1=0, s0=1, s1=1, R=torch.eye(3,device=pred_poses.device))
+    # sim3 = edict(t0=0, t1=0, s0=1, s1=1, R=torch.eye(3,device=pred_poses.device))  # new
     # align the camera poses
     center_aligned = (pred_centers-sim3.t1)/sim3.s1@sim3.R.t()*sim3.s0+sim3.t0
     R_aligned = pred_poses[...,:3]@sim3.R.t()

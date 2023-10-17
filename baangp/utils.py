@@ -98,10 +98,7 @@ def render_image_with_occgrid(
         if radiance_field.training
         else test_chunk_size
     )
-    # print(chunk)
     for i in range(0, num_rays, chunk):
-        # time.sleep(1)
-        # print("sampling: {}".format(i))
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
         ray_indices, t_starts, t_ends = estimator.sampling(
             chunk_rays.origins,
@@ -114,7 +111,6 @@ def render_image_with_occgrid(
             cone_angle=cone_angle,
             alpha_thre=alpha_thre,
         )
-        # print("rendering: {}".format(i))
         rgb, opacity, depth, extras = rendering(
             t_starts,
             t_ends,
