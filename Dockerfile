@@ -43,7 +43,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy ffmpeg binaries
 COPY --from=build-image /usr/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=build-image /usr/lib/*-linux-gnu/* /usr/lib/
-COPY --from=build-image /lib/*-linux-gnu/* /usr/lib/
 
 # Copy source code to container
 COPY ./baangp /baangp
