@@ -1,0 +1,12 @@
+# Ignore Mac system files
+.DS_store
+
+# Ignore python cache files
+*.pyc
+__pycache__/
+
+# Ignore files related to API keys
+.env
+
+# Ignore vscode configurations
+.vscode

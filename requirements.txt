@@ -5,3 +5,5 @@ easydict==1.10
 matplotlib==3.7.2
 lpips==0.1.4
 torchmetrics==1.0.0
+boto3
+opencv-python
