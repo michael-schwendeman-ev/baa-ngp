@@ -46,7 +46,7 @@ def render_image_with_occgrid(
     cone_angle: float = 0.0,
     alpha_thre: float = 0.0,
     # test options
-    test_chunk_size: int = 4096, #8192,
+    test_chunk_size: int = 2048, #8192,
     timestamps: Optional[torch.Tensor] = None,
 ):
     """Render the pixels of an image."""
