@@ -40,7 +40,7 @@ def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split:
     
     #Find the ROI coordinates in 3D ENU space
     aabb = meta['aabb']
-    Pw = np.array([[aabb[0][0],aabb[1][0],aabb[0][0],aabb[1][0]],[aabb[1][1],aabb[1][1],aabb[0][1],aabb[0][1]],[0,0,0,0],[1,1,1,1]])
+    # Pw = np.array([[aabb[0][0],aabb[1][0],aabb[0][0],aabb[1][0]],[aabb[1][1],aabb[1][1],aabb[0][1],aabb[0][1]],[0,0,0,0],[1,1,1,1]])
 
     for i in range(len(meta["frames"])):
         frame = meta["frames"][i]
@@ -71,14 +71,18 @@ def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split:
     # print(camtoworlds[:, :3, -1])
     # camtoworlds[:, :3, -1] /= scaler
     # print(camtoworlds[:, :3, -1])
-    for mins in aabb[0]:
-        mins -= buffer
-    for maxs in aabb[1]:
-        maxs += buffer
-
+    # for mins in aabb[0]:
+    #     mins -= buffer
+    #     # print(mins)
+    # for maxs in aabb[1]:
+    #     maxs += buffer
+    #     # print(maxs)
 
     intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).to(torch.float32)
-    aabb = np.concatenate(meta['aabb']).flatten() #/ scaler
+    aabb = np.concatenate(aabb).flatten() #/ scaler
+    aabb[:3] -= buffer
+    aabb[3:] += buffer
+    # print(aabb)
     aabb = torch.from_numpy(aabb).to(torch.float32)
     num_images = images.shape[0]
 
