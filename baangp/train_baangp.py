@@ -247,10 +247,6 @@ if __name__ == "__main__":
         schedulers["pose_scheduler"] = pose_scheduler
         optimizers["pose_optimizer"] = pose_optimizer
 
-    lpips_net = LPIPS(net="vgg").to(device)
-    lpips_norm_fn = lambda x: x[None, ...].permute(0, 3, 1, 2) * 2 - 1
-    lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
-
     has_checkpoint = False
     models, optimizers, schedulers, epoch, iteration, has_checkpoint = load_ckpt(save_dir=args.save_dir, models=models, optimizers=optimizers, schedulers=schedulers)
 
@@ -391,6 +387,9 @@ if __name__ == "__main__":
     os.makedirs(test_dir,exist_ok=True)
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
     ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0).to(device)
+    lpips_net = LPIPS(net="vgg").to(device)
+    lpips_norm_fn = lambda x: x[None, ...].permute(0, 3, 1, 2) * 2 - 1
+    lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
     res = []
     for i in tqdm.tqdm(range(len(test_dataset))):
         data = test_dataset[i]

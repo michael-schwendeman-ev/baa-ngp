@@ -11,16 +11,16 @@
 
 python3 -u baangp/train_baangp.py   --scene "synthetic_spherical20_nonoisefinal_DS4" \
                                     --data-root "/workspaces/data/schwendy" \
-                                    --save-dir "baa-ngp-5deg-fullat" \
-                                    --adjustment-type "full" \
+                                    --save-dir "baa-ngp-noat" \
+                                    --adjustment-type "none" \
                                     --c2f 0.1 0.5 \
                                     --bounding-box-buffer 10.0 \
                                     --learning-rates "1.0e-2" "1.0e-4" "3.0e-3" "3.0e-5" \
                                     --regularizations "1.0e-6" "0.0" \
                                     --resolutions 400.0 400.0 100.0 0.5 \
                                     --max-steps 10000 \
-                                    --noise 0.087 0.087 0.087 0.0 0.0 0.0
-                                    # --noise 0.0 0.0 0.0 0.0 0.0 0.0
+                                    --noise 0.0 0.0 0.0 0.0 0.0 0.0
+                                    # --noise 0.087 0.087 0.087 0.0 0.0 0.0
                                     # --noise 0.00066 0.00066 0.00066 0.0 0.0 0.0
 
                                     
