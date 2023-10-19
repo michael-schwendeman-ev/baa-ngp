@@ -257,7 +257,7 @@ if __name__ == "__main__":
     # training
     if not has_checkpoint:
         tic = time.time()
-        loader = tqdm.trange(max_steps + 1, desc="training", leave=False)
+        loader = tqdm.trange(max_steps + 1, desc="training", leave=False, disable=True)
         for step in loader:
             models['radiance_field'].train()
             models["estimator"].train()
