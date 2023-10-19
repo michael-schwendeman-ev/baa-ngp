@@ -49,4 +49,4 @@ COPY ./baangp /baangp
 
 # Run the training script
 WORKDIR /baangp
-CMD ["python3", "-u", "train_baangp.py"]
+ENTRYPOINT ["python3", "-u", "train_baangp.py"]
