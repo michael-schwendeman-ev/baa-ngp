@@ -31,12 +31,9 @@ class BAradianceField(torch.nn.Module):
         max_resolution: int = 4096,
         use_viewdirs: bool = True,
         c2f: typing.Optional[float] = None,
-        adjustment_type: str = "full",
-        # dof: int = 6, # degree of freedom of input transformation.
         num_input_dim: int = 3,
         device: str = 'cpu',
         testing: bool = False,
-        noise: typing.List = [0., 0., 0., 0., 0., 0.]
     ) -> None:
         super().__init__()
         
@@ -55,20 +52,20 @@ class BAradianceField(torch.nn.Module):
                                      use_viewdirs=use_viewdirs)
         self.c2f = c2f
 
-        # Set degrees of freedom
-        assert adjustment_type in ["none", "full", "rotation", "translation"]
-        self.adjustment_type = adjustment_type
-        dof = 3
-        if self.adjustment_type == "full":
-            dof = 6
+        # # Set degrees of freedom
+        # assert adjustment_type in ["none", "full", "rotation", "translation"]
+        # self.adjustment_type = adjustment_type
+        # dof = 3
+        # if self.adjustment_type == "full":
+        #     dof = 6
 
-        # noise addition for blender.
-        noise = torch.randn(num_frame, 6, device=device)*torch.tile(torch.tensor(noise), [num_frame, 1]).to(device)
-        self.pose_noise = se3_to_SE3(noise) # [1, 3, 4]
+        # # noise addition for blender.
+        # noise = torch.randn(num_frame, 6, device=device)*torch.tile(torch.tensor(noise), [num_frame, 1]).to(device)
+        # self.pose_noise = se3_to_SE3(noise) # [1, 3, 4]
 
-        # Learnable embedding. 
-        self.pose_parameters = torch.nn.Embedding(num_frame, dof, device=device)
-        torch.nn.init.zeros_(self.pose_parameters.weight)
+        # # Learnable embedding. 
+        # self.pose_parameters = torch.nn.Embedding(num_frame, dof, device=device)
+        # torch.nn.init.zeros_(self.pose_parameters.weight)
 
         # TODO:see if we want to register buffer for this variable.
         self.progress = torch.nn.Parameter(torch.tensor(0.))
@@ -119,26 +116,61 @@ class BAradianceField(torch.nn.Module):
                 poses = noisey_poses
         return poses
 
-    def query_rays(self, grid_3D, idx=None, gt_poses=None, mode='train'):
-        """
-        Assumption: perspective camera.
+    # def query_rays(self, grid_3D, idx=None, gt_poses=None, mode='train'):
+    #     """
+    #     Assumption: perspective camera.
 
+    #     Args:
+    #         grid_3D: 3D grid in camera coordinate (training: pre-sampled).
+    #         idx: frame ids.
+    #         gt_poses: ground truth world-to-camera poses.
+    #         mode: "train", "val", "test", "eval", "test-optim"
+    #     """
+    #     poses = self.get_poses(idx=idx, gt_poses=gt_poses, mode=mode)
+    #     # # given the intrinsic/extrinsic matrices, get the camera center and ray directions
+    #     center_3D = torch.zeros_like(grid_3D) # [B, N, 3]
+    #     # transform from camera to world coordinates
+    #     grid_3D = cam2world(grid_3D, poses) # [B, N, 3], [B, 3, 4] -> [B, 3]
+    #     center_3D = cam2world(center_3D, poses) # [B, N, 3]
+    #     directions = grid_3D - center_3D # [B, N, 3]
+    #     viewdirs = directions / torch.linalg.norm(
+    #         directions, dim=-1, keepdims=True
+    #     )
+    #     if mode in ['train', 'test-optim']:
+    #         # This makes loss calculate easier. No more reshaping is needed.
+    #         center_3D = torch.reshape(center_3D, (-1, 3))
+    #         viewdirs = torch.reshape(viewdirs, (-1, 3))
+    #     return Rays(origins=center_3D, viewdirs=viewdirs)
+    
+    def query_rays(self, photo_pts, camera_models, idx=None, mode='train'):
+        """
         Args:
-            grid_3D: 3D grid in camera coordinate (training: pre-sampled).
-            idx: frame ids.
-            gt_poses: ground truth world-to-camera poses.
+            photo_pts: [num_pts, 2] or [rows, cols, 2] row/column pixel coordinates
+            camera_models: [num_images] list of camera models for each frame
+            idx: [num_pts] or [1] camera ids
             mode: "train", "val", "test", "eval", "test-optim"
         """
-        poses = self.get_poses(idx=idx, gt_poses=gt_poses, mode=mode)
-        # # given the intrinsic/extrinsic matrices, get the camera center and ray directions
-        center_3D = torch.zeros_like(grid_3D) # [B, N, 3]
-        # transform from camera to world coordinates
-        grid_3D = cam2world(grid_3D, poses) # [B, N, 3], [B, 3, 4] -> [B, 3]
-        center_3D = cam2world(center_3D, poses) # [B, N, 3]
-        directions = grid_3D - center_3D # [B, N, 3]
-        viewdirs = directions / torch.linalg.norm(
-            directions, dim=-1, keepdims=True
-        )
+        assert len(idx) == 1 | len(idx) == len(photo_pts)
+        assert all(0 <= i <= len(camera_models) for i in idx)
+        origins = []
+        dirs = []
+        for pt_idx, pt in enumerate(photo_pts):
+            cam_idx = idx[0] if len(idx) == 1 else idx[pt_idx]
+            camera_model = camera_models[cam_idx]
+            origin, dir = camera_model.project_from_camera(pt)
+            origins.append(origin)
+            dirs.append(dir)
+
+        # poses = self.get_poses(idx=idx, gt_poses=gt_poses, mode=mode)
+        # # # given the intrinsic/extrinsic matrices, get the camera center and ray directions
+        # center_3D = torch.zeros_like(grid_3D) # [B, N, 3]
+        # # transform from camera to world coordinates
+        # grid_3D = cam2world(grid_3D, poses) # [B, N, 3], [B, 3, 4] -> [B, 3]
+        # center_3D = cam2world(center_3D, poses) # [B, N, 3]
+        # directions = grid_3D - center_3D # [B, N, 3]
+        # viewdirs = directions / torch.linalg.norm(
+        #     directions, dim=-1, keepdims=True
+        # )
         if mode in ['train', 'test-optim']:
             # This makes loss calculate easier. No more reshaping is needed.
             center_3D = torch.reshape(center_3D, (-1, 3))

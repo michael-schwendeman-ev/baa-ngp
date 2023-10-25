@@ -13,18 +13,16 @@ import torch.nn.functional as F
 from torchmetrics import StructuralSimilarityIndexMeasure, MultiScaleStructuralSimilarityIndexMeasure
 import torchvision.transforms.functional as torchvision_F
 import tqdm
-#from datasets.ba_synthetic import SubjectLoader
 from datasets.ba_ev import SubjectLoader
 from evaluation_utils import (
-    evaluate_camera_alignment,
-    evaluate_test_time_photometric_optim,
-    prealign_cameras
+    evaluate_camera_alignment
 )
 from lie_utils import se3_to_SE3, t3_to_SE3, so3_to_SE3
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from pose_utils import compose_poses
 from radiance_fields.baangp import BAradianceField
 from radiance_fields.ngp import NGPRadianceField
+from camera_models.camera_model import CameraModel
 from utils import (
     render_image_with_occgrid,
     set_random_seed,
@@ -32,7 +30,6 @@ from utils import (
     save_ckpt
 )
 import visualization_utils as viz
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -176,6 +173,14 @@ if __name__ == "__main__":
         buffer=args.bounding_box_buffer
     )
     aabb = train_dataset.aabb
+    train_cameras = CameraModel(        
+        subject_id=args.scene,
+        root_fp=args.data_root,
+        split="train",
+        device=device,
+        adjustment_type=args.adjustment_type,
+        noise=args.noise
+    )
 
     print("Found %d train images"%len(train_dataset.images))
     print("Train image shape", train_dataset.images.shape)
@@ -189,6 +194,14 @@ if __name__ == "__main__":
         batch_over_images=False,
         buffer=args.bounding_box_buffer
     )
+    test_cameras = CameraModel(        
+        subject_id=args.scene,
+        root_fp=args.data_root,
+        split="test",
+        device=device,
+        adjustment_type="none"
+    )
+
     print("Found %d test images."%len(test_dataset.images))
     print("Test image shape", test_dataset.images.shape)
     print(f"Setup Occupancy Grid. Grid resolution is {grid_resolution}")
@@ -204,9 +217,7 @@ if __name__ == "__main__":
         num_frame=len(train_dataset),
         aabb=estimator.aabbs[-1],
         device=device,
-        c2f=args.c2f,
-        adjustment_type=args.adjustment_type,
-        noise=args.noise
+        c2f=args.c2f
     ).to(device)
     
     print("Setting up optimizers...")
@@ -217,13 +228,13 @@ if __name__ == "__main__":
                 optimizer,
                 gamma=(lr_end/lr)**(1./max_steps)
     )
-    models = {"radiance_field": radiance_field, "estimator": estimator}
+    models = {"radiance_field": radiance_field, "estimator": estimator, "camera_model": train_cameras}
     schedulers={"scheduler": scheduler}
     optimizers={"optimizer": optimizer}
 
     if args.adjustment_type != "none":
         pose_optimizer = torch.optim.Adam(
-            models['radiance_field'].pose_parameters.parameters(), lr=lr_pose, weight_decay=weight_decay_pose)
+            train_cameras.parameters(), lr=lr_pose, weight_decay=weight_decay_pose)
         pose_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             pose_optimizer,
             gamma=(lr_pose_end/lr_pose)**(1./max_steps)
@@ -253,18 +264,16 @@ if __name__ == "__main__":
     # training
     if not has_checkpoint:
         tic = time.time()
-        loader = tqdm.trange(max_steps + 1, desc="training", leave=False, disable=True)
+        loader = tqdm.trange(max_steps + 1, desc="training", leave=False, disable=False)
         for step in loader:
             models['radiance_field'].train()
             models["estimator"].train()
 
             i = torch.randint(0, len(train_dataset), (1,)).item()
             data = train_dataset[i]
-
             render_bkgd = data["color_bkgd"]
             pixels = data["pixels"]
-            grid_3D = data["grid_3D"]
-            gt_poses = data["gt_w2c"] # [num_ray, 3, 4]
+            points_2d = data["points_2d"]
             image_ids = data["image_id"]
             
             if args.c2f is not None:
@@ -286,7 +295,7 @@ if __name__ == "__main__":
                 optimizers[key].zero_grad(set_to_none=True)
             
             # query rays
-            rays = models["radiance_field"].query_rays(idx=image_ids, grid_3D=grid_3D, gt_poses=gt_poses, mode='train')
+            rays = models["camera_model"].forward(image_id=image_ids, xy_grid=points_2d, mode='train')
 
             # render
             rgb, acc, depth, n_rendering_samples = render_image_with_occgrid(
@@ -344,22 +353,22 @@ if __name__ == "__main__":
     print("Done training, start evaluation:")
     models["radiance_field"].eval()
     models["estimator"].eval()
+    models["camera_model"].eval()
     models['radiance_field'].testing = True
 
     if args.adjustment_type != "none":
         with torch.no_grad():
             print("Plotting final pose alignment.")
-            pose_parameters = models["radiance_field"].pose_parameters.weight
+            pose_parameters = models["camera_model"].pose_parameters.weight
             if args.adjustment_type == "full":
                 pose_adjustment = se3_to_SE3(pose_parameters) 
             elif args.adjustment_type == "rotation":
                 pose_adjustment = so3_to_SE3(pose_parameters)
             else:
                 pose_adjustment = t3_to_SE3(pose_parameters)
-            gt_poses = train_dataset.camfromworld
-            pred_poses = compose_poses([pose_adjustment, models["radiance_field"].pose_noise, gt_poses])
-            pose_aligned, sim3 = prealign_cameras(pred_poses, gt_poses)
-            error = evaluate_camera_alignment(pose_aligned, gt_poses)
+            gt_poses = models["camera_model"].camtoworld
+            pred_poses = compose_poses([gt_poses, models["camera_model"].pose_noise, pose_adjustment])
+            error = evaluate_camera_alignment(pred_poses, gt_poses)
             rot_error = np.rad2deg(error.R.mean().item())
             trans_error = error.t.mean().item()
             print("--------------------------")
@@ -372,12 +381,12 @@ if __name__ == "__main__":
                 for i, (err_R, err_t) in enumerate(zip(error.R, error.t)):
                     file.write("{} {} {}\n".format(i, err_R.item(), err_t.item()))
 
-            pose_aligned_detached, gt_poses_detached = pose_aligned.detach().cpu(), gt_poses.detach().cpu()
+            pred_poses_detached, gt_poses_detached = pred_poses.detach().cpu(), gt_poses.detach().cpu()
             fig = plt.figure(figsize=(10, 10))
             cam_dir = os.path.join(args.save_dir, "poses")
             os.makedirs(cam_dir, exist_ok=True)
             png_fname = viz.plot_save_poses_blender(fig=fig,
-                                                    pose=pose_aligned_detached, 
+                                                    pose=pred_poses_detached, 
                                                     pose_ref=gt_poses_detached, 
                                                     path=cam_dir, 
                                                     ep=step)
@@ -392,12 +401,14 @@ if __name__ == "__main__":
     lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
     res = []
     for i in tqdm.tqdm(range(len(test_dataset))):
-        data = test_dataset[i]
         with torch.no_grad():
-            rays = models["radiance_field"].query_rays(idx=i,
-                                                       gt_poses=data['gt_w2c'], 
-                                                       mode='test',
-                                                       grid_3D=data['grid_3D'])
+            data = test_dataset[i]
+            render_bkgd = data["color_bkgd"]
+            loaded_pixels = data["pixels"]
+            points_2d = data["points_2d"]
+            image_ids = data["image_id"]
+            rays = test_cameras.forward(image_id=image_ids, xy_grid=points_2d, mode='test')
+
             # rendering
             rgb, opacity, depth, _ = render_image_with_occgrid(
                 # scene
@@ -414,7 +425,6 @@ if __name__ == "__main__":
             )
             # evaluate view synthesis
             invdepth = 1/ depth
-            loaded_pixels = data["pixels"]
             h, w, c = loaded_pixels.shape
             pixels = loaded_pixels.permute(2, 0, 1)
             rgb_map = rgb.view(h, w, 3).permute(2, 0, 1)
