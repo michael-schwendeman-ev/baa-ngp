@@ -36,7 +36,6 @@ def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split:
     images = []
     camtoworlds = []
     intrinsics = []
-    depths = np.zeros([4,0], dtype=float)
     
     #Find the ROI coordinates in 3D ENU space
     aabb = meta['aabb']
@@ -68,25 +67,16 @@ def load_renderings(root_fp: str, subject_id: str, crop_borders: int = 0, split:
     camtoworlds = torch.stack(camtoworlds, axis=0)
     # scaler = aabb[1][0]
     # scaler = 1000.0
-    # print(camtoworlds[:, :3, -1])
     # camtoworlds[:, :3, -1] /= scaler
-    # print(camtoworlds[:, :3, -1])
-    # for mins in aabb[0]:
-    #     mins -= buffer
-    #     # print(mins)
-    # for maxs in aabb[1]:
-    #     maxs += buffer
-    #     # print(maxs)
 
     intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).to(torch.float32)
     aabb = np.concatenate(aabb).flatten() #/ scaler
     aabb[:3] -= buffer
     aabb[3:] += buffer
-    # print(aabb)
     aabb = torch.from_numpy(aabb).to(torch.float32)
     num_images = images.shape[0]
 
-    return images, depths, camtoworlds, intrinsics, aabb, num_images
+    return images, camtoworlds, intrinsics, aabb, num_images
 
 
 class SubjectLoader(torch.utils.data.Dataset):
@@ -108,7 +98,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         self.split = split
         self.color_bkgd_aug = color_bkgd_aug
         self.batch_over_images = batch_over_images
-        self.images, self.depths, self.w2c, self.K, self.aabb, self.num_train_img = \
+        self.images, self.w2c, self.K, self.aabb, self.num_train_img = \
             load_renderings(root_fp, subject_id, 0, split, buffer)
 
         self.images = self.images.to(device)
@@ -200,28 +190,24 @@ class SubjectLoader(torch.utils.data.Dataset):
             )
         # adds 0.5 here.
         xy_grid = torch.stack([x,y],dim=-1).view(-1, 2) + 0.5 # [HW,2] or [B, N_rays, 2]
-        # self.K is of shape [3,3]
-        grid_3D = img2cam(to_hom(xy_grid)[:, None, :], self.K[image_id]) # [B, 1, 2], [B, 3, 3] -> [B, 1, 3]
+
         images = self.images
         rgba = images[image_id, y, x] / 255.0
-        w2c = torch.reshape(self.camfromworld[image_id], (-1, 3, 4)) # [3, 4] or (num_rays, 3, 4)
 
         if self.training:
             rgba = torch.reshape(rgba, (-1, 4))
-            grid_3D = torch.reshape(grid_3D, (-1, 1, 3)) # extra dimension is needed for query_rays.
+            xy_grid = torch.reshape(xy_grid, (-1, 1, 2)) # extra dimension is needed for query_rays.
             return {
                 "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
-                "grid_3D": grid_3D,  # [h, w, 3] or [num_rays, 3]
-                "gt_w2c": w2c, # [num_images, 3, 4]
+                "points_2d": xy_grid,  # [h, w, 2] or [num_rays, 2]
                 "image_id": image_id, # [num_images]]
             }
         else:
             rgba = torch.reshape(rgba, (self.height, self.width, 4))
-            grid_3D = torch.reshape(grid_3D, (self.height, self.width, 3))
+            xy_grid = torch.reshape(xy_grid, (self.height, self.width, 2))
             return {
                 "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
-                "grid_3D": grid_3D,  # [h, w, 3] or [num_rays, 3]
-                "gt_w2c": w2c, # [num_images, 3, 4]
+                "points_2d": xy_grid,  # [h, w, 2] or [num_rays, 2]
                 "image_id": image_id, # [num_images]]
             }
 

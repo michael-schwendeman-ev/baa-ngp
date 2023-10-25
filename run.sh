@@ -9,13 +9,13 @@
 # exp_name="baa-ngp-10pixelnoise-noat-check"
 # data_root="/workspaces/data/schwendy"
 
-python3 -u baangp/train_baangp.py   --scene "synthetic_spherical20_nonoisefinal_DS4" \
+python3 -u baangp/train_baangp.py   --scene "synthetic_spherical20_10pixelnoise_DS4" \
                                     --data-root "/workspaces/data/schwendy" \
-                                    --save-dir "baa-ngp-noat" \
-                                    --adjustment-type "none" \
+                                    --save-dir "baa-ngp-refactored-rotonly2" \
+                                    --adjustment-type "rotation" \
                                     --c2f 0.1 0.5 \
                                     --bounding-box-buffer 10.0 \
-                                    --learning-rates "1.0e-2" "1.0e-4" "3.0e-3" "3.0e-5" \
+                                    --learning-rates "1.0e-2" "1.0e-4" "3.0e-4" "3.0e-6" \
                                     --regularizations "1.0e-6" "0.0" \
                                     --resolutions 400.0 400.0 100.0 0.5 \
                                     --max-steps 10000 \
