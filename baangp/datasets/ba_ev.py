@@ -140,7 +140,11 @@ class SubjectLoader(torch.utils.data.Dataset):
 
             pixels = pixels * alpha + color_bkgd * (1.0 - alpha)
             return pixels, color_bkgd
-        pixels, color_bkgd = rgba_to_pixels(rgba)
+        if rgba.size(-1) == 4:
+            pixels, color_bkgd = rgba_to_pixels(rgba)
+        else:
+            pixels = rgba
+            color_bkgd = torch.ones(3, device=self.images.device)
         if self.training:
             return {
                 "pixels": pixels,  # [n_rays, 3] or [h, w, 3]
@@ -193,9 +197,9 @@ class SubjectLoader(torch.utils.data.Dataset):
 
         images = self.images
         rgba = images[image_id, y, x] / 255.0
-
+        channels = rgba.size(-1) 
         if self.training:
-            rgba = torch.reshape(rgba, (-1, 4))
+            rgba = torch.reshape(rgba, (-1, channels))
             xy_grid = torch.reshape(xy_grid, (-1, 1, 2)) # extra dimension is needed for query_rays.
             return {
                 "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
@@ -203,7 +207,7 @@ class SubjectLoader(torch.utils.data.Dataset):
                 "image_id": image_id, # [num_images]]
             }
         else:
-            rgba = torch.reshape(rgba, (self.height, self.width, 4))
+            rgba = torch.reshape(rgba, (self.height, self.width, channels))
             xy_grid = torch.reshape(xy_grid, (self.height, self.width, 2))
             return {
                 "rgba": rgba,  # [h, w, 4] or [num_rays, 4]

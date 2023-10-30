@@ -8,20 +8,22 @@
 # scene="synthetic_spherical20_nonoise_goodtestimages_DS4"
 # exp_name="baa-ngp-10pixelnoise-noat-check"
 # data_root="/workspaces/data/schwendy"
+# CTTBLO004_ROI_1_transient_DS4
 
-python3 -u baangp/train_baangp.py   --scene "synthetic_spherical20_10pixelnoise_DS4" \
+python3 -u baangp/train_baangp.py   --scene "CTTBLO004_ROI_1_Sam_PaddedMask_DS4" \
                                     --data-root "/workspaces/data/schwendy" \
-                                    --save-dir "baa-ngp-refactored-rotonly2" \
+                                    --save-dir "baa-ngp-refactored-10pixnoise-rotat-fullaabb2-nobuffer-noviewdirs" \
                                     --adjustment-type "rotation" \
                                     --c2f 0.1 0.5 \
-                                    --bounding-box-buffer 10.0 \
+                                    --bounding-box-buffer 0.0 \
                                     --learning-rates "1.0e-2" "1.0e-4" "3.0e-4" "3.0e-6" \
-                                    --regularizations "1.0e-6" "0.0" \
+                                    --regularizations "1.0e-6" "1.0e-6" \
                                     --resolutions 400.0 400.0 100.0 0.5 \
                                     --max-steps 10000 \
-                                    --noise 0.0 0.0 0.0 0.0 0.0 0.0
+                                    --noise 0.00066 0.00066 0.00066 0.0 0.0 0.0
+                                    # --noise 0.0 0.0 0.0 0.0 0.0 0.0
+                                    # --noise 0.038 0.038 0.038 0.0 0.0 0.0
                                     # --noise 0.087 0.087 0.087 0.0 0.0 0.0
-                                    # --noise 0.00066 0.00066 0.00066 0.0 0.0 0.0
 
                                     
 

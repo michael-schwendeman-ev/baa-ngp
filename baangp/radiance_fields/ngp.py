@@ -216,7 +216,7 @@ class NGPRadianceField(torch.nn.Module):
             assert (
                 positions.shape == directions.shape
             ), f"{positions.shape} v.s. {directions.shape}"
-            density, embedding = self.query_density(positions, weights=weights, return_feat=True)
-            rgb = self._query_rgb(directions, embedding=embedding)
+        density, embedding = self.query_density(positions, weights=weights, return_feat=True)
+        rgb = self._query_rgb(directions, embedding=embedding)
         return rgb, density  # type: ignore
 

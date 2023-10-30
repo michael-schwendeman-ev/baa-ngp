@@ -184,26 +184,6 @@ if __name__ == "__main__":
 
     print("Found %d train images"%len(train_dataset.images))
     print("Train image shape", train_dataset.images.shape)
-    print("Setup the test dataset.")
-    test_dataset = SubjectLoader(
-        subject_id=args.scene,
-        root_fp=args.data_root,
-        split="test",
-        num_rays=None,
-        device=device,
-        batch_over_images=False,
-        buffer=args.bounding_box_buffer
-    )
-    test_cameras = CameraModel(        
-        subject_id=args.scene,
-        root_fp=args.data_root,
-        split="test",
-        device=device,
-        adjustment_type="none"
-    )
-
-    print("Found %d test images."%len(test_dataset.images))
-    print("Test image shape", test_dataset.images.shape)
     print(f"Setup Occupancy Grid. Grid resolution is {grid_resolution}")
 
     estimator = OccGridEstimator(
@@ -217,7 +197,8 @@ if __name__ == "__main__":
         num_frame=len(train_dataset),
         aabb=estimator.aabbs[-1],
         device=device,
-        c2f=args.c2f
+        c2f=args.c2f,
+        use_viewdirs=False
     ).to(device)
     
     print("Setting up optimizers...")
@@ -260,6 +241,12 @@ if __name__ == "__main__":
 
     has_checkpoint = False
     models, optimizers, schedulers, epoch, iteration, has_checkpoint = load_ckpt(save_dir=args.save_dir, models=models, optimizers=optimizers, schedulers=schedulers)
+    # has_checkpoint = False
+    # val_start = 0.
+    # val_end = 0.3
+    # thresh_start = 2000
+    # thresh_end = 7000
+    # thresh_function = torch.nn.Threshold(0.9, 0, True)
 
     # training
     if not has_checkpoint:
@@ -310,13 +297,21 @@ if __name__ == "__main__":
                 cone_angle=cone_angle,
                 alpha_thre=alpha_thre,
             )
+            num_rays = len(pixels)
+            
+            # thresh = val_start + (val_end-val_start)*(step - thresh_start) / (thresh_end - thresh_start)
+            # thresh = np.clip(thresh, val_start, val_end)
+            # indices = torch.where(acc < thresh)[0]
+            # pixels[indices] = render_bkgd
+            
+            # print(acc.count_nonzero())
+            # break
             if n_rendering_samples == 0:
                 loader.set_postfix(it=step, loss="skipped")
                 continue
 
             if target_sample_batch_size > 0:
                 # dynamic batch size for rays to keep sample batch size constant.
-                num_rays = len(pixels)
                 num_rays = int(
                     num_rays * (target_sample_batch_size / float(n_rendering_samples))
                 )
@@ -356,6 +351,27 @@ if __name__ == "__main__":
     models["camera_model"].eval()
     models['radiance_field'].testing = True
 
+    print("Setup the test dataset.")
+    test_dataset = SubjectLoader(
+        subject_id=args.scene,
+        root_fp=args.data_root,
+        split="train",
+        num_rays=None,
+        device=device,
+        batch_over_images=False,
+        buffer=args.bounding_box_buffer
+    )
+    test_cameras = CameraModel(        
+        subject_id=args.scene,
+        root_fp=args.data_root,
+        split="train",
+        device=device,
+        adjustment_type="none"
+    )
+
+    print("Found %d test images."%len(test_dataset.images))
+    print("Test image shape", test_dataset.images.shape)
+
     if args.adjustment_type != "none":
         with torch.no_grad():
             print("Plotting final pose alignment.")
@@ -367,8 +383,10 @@ if __name__ == "__main__":
             else:
                 pose_adjustment = t3_to_SE3(pose_parameters)
             gt_poses = models["camera_model"].camtoworld
-            pred_poses = compose_poses([gt_poses, models["camera_model"].pose_noise, pose_adjustment])
-            error = evaluate_camera_alignment(pred_poses, gt_poses)
+            pose_noise = models["camera_model"].pose_noise
+            noisey_poses = compose_poses([pose_noise, gt_poses])
+            adjusted_poses = compose_poses([pose_adjustment, noisey_poses])
+            error = evaluate_camera_alignment(adjusted_poses, gt_poses)
             rot_error = np.rad2deg(error.R.mean().item())
             trans_error = error.t.mean().item()
             print("--------------------------")
@@ -381,7 +399,7 @@ if __name__ == "__main__":
                 for i, (err_R, err_t) in enumerate(zip(error.R, error.t)):
                     file.write("{} {} {}\n".format(i, err_R.item(), err_t.item()))
 
-            pred_poses_detached, gt_poses_detached = pred_poses.detach().cpu(), gt_poses.detach().cpu()
+            pred_poses_detached, gt_poses_detached = adjusted_poses.detach().cpu(), gt_poses.detach().cpu()
             fig = plt.figure(figsize=(10, 10))
             cam_dir = os.path.join(args.save_dir, "poses")
             os.makedirs(cam_dir, exist_ok=True)
